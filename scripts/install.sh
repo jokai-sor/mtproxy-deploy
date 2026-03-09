@@ -13,6 +13,9 @@ MTPROXY_SERVICE_FILE="/etc/systemd/system/mtproxy.service"
 LOCAL_TLS_PROXY=""
 LOCAL_TLS_PORT=""
 NGINX_SITE="/etc/nginx/sites-enabled/webdock"
+STATE_DIR="/etc/mtproxy"
+FAKETLS_STATE_FILE="$STATE_DIR/faketls.env"
+ROTATE_SECRET="0"
 
 usage() {
   cat <<USAGE
@@ -30,18 +33,30 @@ Options:
   --local-tls-proxy nginx
   --local-tls-port PORT
   --nginx-site PATH
+  --rotate-secret
 USAGE
 }
 
 backup_file() {
   local file="$1"
   if [[ -f "$file" ]]; then
-    cp "$file" "$file.bak.$STAMP"
+    local dir base backup_dir
+    dir="$(dirname "$file")"
+    base="$(basename "$file")"
+    backup_dir="$dir"
+    if [[ "$dir" == "/etc/nginx/sites-enabled" ]]; then
+      backup_dir="/etc/nginx"
+    fi
+    cp "$file" "$backup_dir/$base.bak.$STAMP"
   fi
 }
 
 hex_domain() {
   printf '%s' "$1" | xxd -ps -c 256
+}
+
+ensure_state_dir() {
+  install -d -m 0755 "$STATE_DIR"
 }
 
 patch_nginx_for_local_tls() {
@@ -58,12 +73,12 @@ import sys
 site = Path(sys.argv[1])
 port = sys.argv[2]
 text = site.read_text()
-line_v4 = f"    listen {port} ssl;"
-if line_v4 not in text:
+needle = f"    listen {port} ssl; # managed by Certbot\n"
+if needle not in text:
     raise SystemExit(f"nginx site does not contain expected listen line for port {port}")
-insert = f"{line_v4} # managed by Certbot\n    listen 127.0.0.1:443 ssl;\n"
+insert = needle + "    listen 127.0.0.1:443 ssl;\n"
 if 'listen 127.0.0.1:443 ssl;' not in text:
-    text = text.replace(f"{line_v4} # managed by Certbot\n", insert, 1)
+    text = text.replace(needle, insert, 1)
 site.write_text(text)
 PY
   nginx -t
@@ -77,6 +92,21 @@ patch_hosts_for_domain() {
   fi
 }
 
+write_faketls_state() {
+  ensure_state_dir
+  cat > "$FAKETLS_STATE_FILE" <<STATE
+MODE=$MODE
+DOMAIN=$DOMAIN
+LOCAL_TLS_PROXY=$LOCAL_TLS_PROXY
+LOCAL_TLS_PORT=$LOCAL_TLS_PORT
+NGINX_SITE=$NGINX_SITE
+STATE
+}
+
+clear_faketls_state() {
+  rm -f "$FAKETLS_STATE_FILE"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode) MODE="$2"; shift 2 ;;
@@ -88,6 +118,7 @@ while [[ $# -gt 0 ]]; do
     --local-tls-proxy) LOCAL_TLS_PROXY="$2"; shift 2 ;;
     --local-tls-port) LOCAL_TLS_PORT="$2"; shift 2 ;;
     --nginx-site) NGINX_SITE="$2"; shift 2 ;;
+    --rotate-secret) ROTATE_SECRET="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -120,31 +151,44 @@ if [[ "$MODE" == "faketls" ]]; then
 fi
 
 STAMP="$(date +%F-%H%M%S)"
+BUILD_DIR="$(mktemp -d /tmp/mtproxy-build.XXXXXX)"
+cleanup() {
+  rm -rf "$BUILD_DIR"
+}
+trap cleanup EXIT
 
 apt-get update
 apt-get install -y git curl build-essential libssl-dev zlib1g-dev ufw
 
-rm -rf "$MTPROXY_DIR"
-git clone https://github.com/mtProtoProxy/MTProxy-official "$MTPROXY_DIR"
-
-perl -0pi -e 's/^CFLAGS = (.*)$/CFLAGS = -fcommon $1/m' "$MTPROXY_DIR/Makefile"
-perl -0pi -e 's/assert \(!\(p & 0xffff0000\)\);\n    PID\.pid = p;/PID.pid = (unsigned short)(p \& 0xffff);/' "$MTPROXY_DIR/common/pid.c"
-
-make -C "$MTPROXY_DIR" clean
-make -C "$MTPROXY_DIR"
-
-cd "$MTPROXY_DIR/objs/bin"
+git clone https://github.com/mtProtoProxy/MTProxy-official "$BUILD_DIR"
+perl -0pi -e 's/^CFLAGS = (.*)$/CFLAGS = -fcommon $1/m' "$BUILD_DIR/Makefile"
+perl -0pi -e 's/assert \(!\(p & 0xffff0000\)\);\n    PID\.pid = p;/PID.pid = (unsigned short)(p \& 0xffff);/' "$BUILD_DIR/common/pid.c"
+make -C "$BUILD_DIR" clean
+make -C "$BUILD_DIR"
+cd "$BUILD_DIR/objs/bin"
 curl -fsSL https://core.telegram.org/getProxySecret -o proxy-secret
 curl -fsSL https://core.telegram.org/getProxyConfig -o proxy-multi.conf
 
-install -d -m 0755 "$(dirname "$MTPROXY_SECRET_FILE")"
-head -c 16 /dev/urandom | xxd -ps > "$MTPROXY_SECRET_FILE"
-SECRET="$(tr -d '\n' < "$MTPROXY_SECRET_FILE")"
+ensure_state_dir
+if [[ -f "$MTPROXY_SECRET_FILE" && "$ROTATE_SECRET" != "1" ]]; then
+  SECRET="$(tr -d '\n' < "$MTPROXY_SECRET_FILE")"
+else
+  head -c 16 /dev/urandom | xxd -ps > "$MTPROXY_SECRET_FILE"
+  SECRET="$(tr -d '\n' < "$MTPROXY_SECRET_FILE")"
+fi
 
 if [[ "$MODE" == "standard" ]]; then
   EXEC_START="$MTPROXY_DIR/objs/bin/mtproto-proxy -u nobody -p $MTPROXY_STATS_PORT -H $MTPROXY_PORT -S $SECRET --aes-pwd $MTPROXY_DIR/objs/bin/proxy-secret $MTPROXY_DIR/objs/bin/proxy-multi.conf -M $MTPROXY_WORKERS"
 else
   EXEC_START="$MTPROXY_DIR/objs/bin/mtproto-proxy -u nobody -p $MTPROXY_STATS_PORT -H $MTPROXY_PORT -S $SECRET -D $DOMAIN --address $HOST_IP --aes-pwd $MTPROXY_DIR/objs/bin/proxy-secret $MTPROXY_DIR/objs/bin/proxy-multi.conf -M 0"
+fi
+
+if [[ "$MODE" == "faketls" && "$LOCAL_TLS_PROXY" == "nginx" && -n "$LOCAL_TLS_PORT" ]]; then
+  patch_nginx_for_local_tls "$NGINX_SITE" "$LOCAL_TLS_PORT"
+  patch_hosts_for_domain "$DOMAIN"
+  write_faketls_state
+else
+  clear_faketls_state
 fi
 
 backup_file "$MTPROXY_SERVICE_FILE"
@@ -165,10 +209,11 @@ RestartSec=3
 WantedBy=multi-user.target
 UNIT
 
-if [[ "$MODE" == "faketls" && "$LOCAL_TLS_PROXY" == "nginx" && -n "$LOCAL_TLS_PORT" ]]; then
-  patch_nginx_for_local_tls "$NGINX_SITE" "$LOCAL_TLS_PORT"
-  patch_hosts_for_domain "$DOMAIN"
+if [[ -d "$MTPROXY_DIR" ]]; then
+  mv "$MTPROXY_DIR" "$MTPROXY_DIR.prev.$STAMP"
 fi
+mv "$BUILD_DIR" "$MTPROXY_DIR"
+mkdir -p "$BUILD_DIR"
 
 systemctl daemon-reload
 systemctl enable --now mtproxy
@@ -189,6 +234,7 @@ echo "port: $MTPROXY_PORT"
 if [[ -n "$DOMAIN" ]]; then
   echo "domain: $DOMAIN"
 fi
+echo "secret_rotated: $ROTATE_SECRET"
 echo
 echo "mtproxy_status:"
 systemctl --no-pager --full status mtproxy | sed -n '1,18p'

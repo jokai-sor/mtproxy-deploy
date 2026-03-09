@@ -26,8 +26,10 @@ This project does not manage:
 - `ufw` installed if you want firewall automation
 - for `faketls` mode:
   - a domain pointed to the server
-  - local HTTPS endpoint that can answer for that domain
   - dedicated public `443/tcp` for MTProxy
+  - a TLS-capable endpoint for that domain that MTProxy can probe
+
+`nginx` is not a project dependency. If you already have a local HTTPS service and want to reuse it for a single-host FakeTLS setup, `mtproxy-deploy` can optionally patch that local service.
 
 ## Quick start
 
@@ -50,7 +52,7 @@ sudo ./scripts/install.sh \
   --domain tg.example.com
 ```
 
-Optional local TLS check helper for FakeTLS when your public web server is moved away from `443` and available locally on another HTTPS port:
+Optional single-host workaround for FakeTLS when you deliberately reuse a local HTTPS service after moving the public website away from `443`:
 
 ```bash
 sudo ./scripts/install.sh \
@@ -67,7 +69,7 @@ That helper adds:
 - `127.0.0.1:443` listener to the chosen local TLS server config
 - `127.0.0.1 <domain>` to `/etc/hosts`
 
-Use it only if you understand the tradeoff and control that host locally.
+This is an optional compatibility helper, not the primary architecture of the project.
 
 ## What install.sh does
 
@@ -78,9 +80,11 @@ Use it only if you understand the tradeoff and control that host locally.
 - PID truncation patch in `common/pid.c`
 4. Downloads `proxy-secret` and `proxy-multi.conf`
 5. Generates MTProxy secret
-6. Creates `/etc/systemd/system/mtproxy.service`
-7. Opens the client TCP port in `ufw` if available
-8. Prints ready-to-use Telegram links
+6. Preserves the existing MTProxy secret by default
+7. Creates `/etc/systemd/system/mtproxy.service`
+8. Replaces the deployment only after a successful build
+9. Opens the client TCP port in `ufw` if available
+10. Prints ready-to-use Telegram links
 
 ## Project layout
 

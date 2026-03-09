@@ -8,7 +8,9 @@ FakeTLS is not generic HTTPS reverse proxying. MTProxy must own the public clien
 
 1. A domain that resolves to the server
 2. TLS-mode enabled with `-D <domain>`
-3. A local HTTPS endpoint that answers for that domain so MTProxy can learn TLS handshake characteristics
+3. A TLS-capable endpoint for that domain so MTProxy can learn handshake characteristics
+
+That endpoint does not have to be `nginx`, and `nginx` is not a dependency of this project.
 
 ## Practical deployment patterns
 
@@ -18,14 +20,14 @@ FakeTLS is not generic HTTPS reverse proxying. MTProxy must own the public clien
 - MTProxy owns public `443`
 - separate web service elsewhere
 
-### Single-host compromise
+### Optional single-host workaround
 
 - public `443` goes to MTProxy
 - web server is moved to another public port such as `4443`
 - the same web server also listens on `127.0.0.1:443`
 - `/etc/hosts` resolves the chosen domain to `127.0.0.1` locally
 
-This is the pattern supported by `install.sh --local-tls-proxy nginx --local-tls-port 4443`.
+This is an optional helper path supported by `install.sh --local-tls-proxy nginx --local-tls-port 4443`.
 
 ## Caveats
 

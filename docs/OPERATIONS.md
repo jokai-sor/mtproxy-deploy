@@ -45,6 +45,14 @@ sudo systemctl cat mtproxy
 sudo systemctl restart mtproxy
 ```
 
+## Secret rotation
+
+By default, rerunning `install.sh` keeps the existing secret. To rotate it explicitly:
+
+```bash
+sudo ./scripts/install.sh --mode standard --host-ip <IP> --port 8443 --rotate-secret
+```
+
 ## FakeTLS link generation
 
 ```bash
@@ -62,7 +70,7 @@ Service file backups are stored as:
 /etc/systemd/system/mtproxy.service.bak.<timestamp>
 ```
 
-If local TLS helper was used, backups are also created for:
+If local TLS helper was used, uninstall also removes the added `127.0.0.1:443` nginx listen and the `/etc/hosts` domain entry. Backups are also created for:
 
 ```text
 /etc/hosts.bak.<timestamp>
