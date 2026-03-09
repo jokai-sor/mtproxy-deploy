@@ -1,5 +1,7 @@
 # mtproxy-deploy
 
+[English](README.md) | [Русский](README.ru.md)
+
 Operational deployment project for standalone Telegram MTProxy on Ubuntu.
 
 `mtproxy-deploy` is intentionally separate from `proxyctl` and Dante SOCKS5. It focuses on one job: build, install, run, and operate MTProxy cleanly on a VPS.
