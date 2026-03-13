@@ -4,17 +4,16 @@ set -euo pipefail
 MODE="standard"
 HOST_IP=""
 DOMAIN=""
-MTPROXY_PORT="8443"
-MTPROXY_STATS_PORT="8888"
-MTPROXY_WORKERS="1"
-MTPROXY_DIR="/opt/MTProxy"
-MTPROXY_SECRET_FILE="/etc/mtproxy/secret"
-MTPROXY_SERVICE_FILE="/etc/systemd/system/mtproxy.service"
+MTG_PORT="8443"
+MTG_BINARY="/usr/local/bin/mtg"
+MTG_CONFIG_DIR="/etc/mtg"
+MTG_CONFIG="$MTG_CONFIG_DIR/config.toml"
+MTG_SECRET_FILE="$MTG_CONFIG_DIR/secret"
+MTG_SERVICE_FILE="/etc/systemd/system/mtg.service"
 LOCAL_TLS_PROXY=""
 LOCAL_TLS_PORT=""
 NGINX_SITE="/etc/nginx/sites-enabled/webdock"
-STATE_DIR="/etc/mtproxy"
-FAKETLS_STATE_FILE="$STATE_DIR/faketls.env"
+FAKETLS_STATE_FILE="$MTG_CONFIG_DIR/faketls.env"
 ROTATE_SECRET="0"
 
 usage() {
@@ -27,8 +26,6 @@ Options:
   --mode standard|faketls
   --host-ip IP
   --port PORT
-  --stats-port PORT
-  --workers N
   --domain DOMAIN
   --local-tls-proxy nginx
   --local-tls-port PORT
@@ -37,26 +34,12 @@ Options:
 USAGE
 }
 
-backup_file() {
-  local file="$1"
-  if [[ -f "$file" ]]; then
-    local dir base backup_dir
-    dir="$(dirname "$file")"
-    base="$(basename "$file")"
-    backup_dir="$dir"
-    if [[ "$dir" == "/etc/nginx/sites-enabled" ]]; then
-      backup_dir="/etc/nginx"
-    fi
-    cp "$file" "$backup_dir/$base.bak.$STAMP"
-  fi
-}
-
 hex_domain() {
   printf '%s' "$1" | xxd -ps -c 256
 }
 
-ensure_state_dir() {
-  install -d -m 0755 "$STATE_DIR"
+ensure_config_dir() {
+  install -d -m 0755 "$MTG_CONFIG_DIR"
 }
 
 patch_nginx_for_local_tls() {
@@ -92,8 +75,22 @@ patch_hosts_for_domain() {
   fi
 }
 
+backup_file() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    local dir base backup_dir
+    dir="$(dirname "$file")"
+    base="$(basename "$file")"
+    backup_dir="$dir"
+    if [[ "$dir" == "/etc/nginx/sites-enabled" ]]; then
+      backup_dir="/etc/nginx"
+    fi
+    cp "$file" "$backup_dir/$base.bak.$STAMP"
+  fi
+}
+
 write_faketls_state() {
-  ensure_state_dir
+  ensure_config_dir
   cat > "$FAKETLS_STATE_FILE" <<STATE
 MODE=$MODE
 DOMAIN=$DOMAIN
@@ -107,13 +104,39 @@ clear_faketls_state() {
   rm -f "$FAKETLS_STATE_FILE"
 }
 
+install_mtg() {
+  local arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)  arch="amd64" ;;
+    aarch64) arch="arm64" ;;
+    armv7l)  arch="arm" ;;
+    *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
+  esac
+
+  local version
+  version="$(curl -fsSL https://api.github.com/repos/9seconds/mtg/releases/latest \
+    | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')"
+
+  if [[ -z "$version" ]]; then
+    echo "failed to detect latest mtg version" >&2
+    exit 1
+  fi
+
+  echo "installing mtg v${version} (${arch})..."
+  local url="https://github.com/9seconds/mtg/releases/download/v${version}/mtg-${version}-linux-${arch}.tar.gz"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  curl -fsSL "$url" | tar xz -C "$tmpdir"
+  install -m 0755 "$tmpdir/mtg" "$MTG_BINARY"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode) MODE="$2"; shift 2 ;;
     --host-ip) HOST_IP="$2"; shift 2 ;;
-    --port) MTPROXY_PORT="$2"; shift 2 ;;
-    --stats-port) MTPROXY_STATS_PORT="$2"; shift 2 ;;
-    --workers) MTPROXY_WORKERS="$2"; shift 2 ;;
+    --port) MTG_PORT="$2"; shift 2 ;;
     --domain) DOMAIN="$2"; shift 2 ;;
     --local-tls-proxy) LOCAL_TLS_PROXY="$2"; shift 2 ;;
     --local-tls-port) LOCAL_TLS_PORT="$2"; shift 2 ;;
@@ -143,65 +166,55 @@ if [[ "$MODE" == "faketls" ]]; then
     echo "--domain is required in faketls mode" >&2
     exit 1
   fi
-  if [[ "$MTPROXY_PORT" != "443" ]]; then
+  if [[ "$MTG_PORT" != "443" ]]; then
     echo "faketls mode should use --port 443" >&2
     exit 1
   fi
-  MTPROXY_WORKERS="0"
 fi
 
 STAMP="$(date +%F-%H%M%S)"
-BUILD_DIR="$(mktemp -d /tmp/mtproxy-build.XXXXXX)"
-cleanup() {
-  rm -rf "$BUILD_DIR"
-}
-trap cleanup EXIT
 
-apt-get update
-apt-get install -y git curl build-essential libssl-dev zlib1g-dev ufw
+apt-get update -q
+apt-get install -y -q curl xxd ufw
 
-git clone https://github.com/mtProtoProxy/MTProxy-official "$BUILD_DIR"
-perl -0pi -e 's/^CFLAGS = (.*)$/CFLAGS = -fcommon $1/m' "$BUILD_DIR/Makefile"
-perl -0pi -e 's/assert \(!\(p & 0xffff0000\)\);\n    PID\.pid = p;/PID.pid = (unsigned short)(p \& 0xffff);/' "$BUILD_DIR/common/pid.c"
-make -C "$BUILD_DIR" clean
-make -C "$BUILD_DIR"
-cd "$BUILD_DIR/objs/bin"
-curl -fsSL https://core.telegram.org/getProxySecret -o proxy-secret
-curl -fsSL https://core.telegram.org/getProxyConfig -o proxy-multi.conf
+install_mtg
+ensure_config_dir
 
-ensure_state_dir
-if [[ -f "$MTPROXY_SECRET_FILE" && "$ROTATE_SECRET" != "1" ]]; then
-  SECRET="$(tr -d '\n' < "$MTPROXY_SECRET_FILE")"
+if [[ -f "$MTG_SECRET_FILE" && "$ROTATE_SECRET" != "1" ]]; then
+  SECRET="$(tr -d '\n' < "$MTG_SECRET_FILE")"
 else
-  head -c 16 /dev/urandom | xxd -ps > "$MTPROXY_SECRET_FILE"
-  SECRET="$(tr -d '\n' < "$MTPROXY_SECRET_FILE")"
+  if [[ "$MODE" == "faketls" ]]; then
+    SECRET="$("$MTG_BINARY" generate-secret --hex "$DOMAIN")"
+  else
+    SECRET="$("$MTG_BINARY" generate-secret)"
+  fi
+  echo "$SECRET" > "$MTG_SECRET_FILE"
 fi
 
-if [[ "$MODE" == "standard" ]]; then
-  EXEC_START="$MTPROXY_DIR/objs/bin/mtproto-proxy -u nobody -p $MTPROXY_STATS_PORT -H $MTPROXY_PORT -S $SECRET --aes-pwd $MTPROXY_DIR/objs/bin/proxy-secret $MTPROXY_DIR/objs/bin/proxy-multi.conf -M $MTPROXY_WORKERS"
-else
-  EXEC_START="$MTPROXY_DIR/objs/bin/mtproto-proxy -u nobody -p $MTPROXY_STATS_PORT -H $MTPROXY_PORT -S $SECRET -D $DOMAIN --address $HOST_IP --aes-pwd $MTPROXY_DIR/objs/bin/proxy-secret $MTPROXY_DIR/objs/bin/proxy-multi.conf -M 0"
-fi
+cat > "$MTG_CONFIG" <<TOML
+secret = "${SECRET}"
+bind-to = "${HOST_IP}:${MTG_PORT}"
+TOML
 
 if [[ "$MODE" == "faketls" && "$LOCAL_TLS_PROXY" == "nginx" && -n "$LOCAL_TLS_PORT" ]]; then
   patch_nginx_for_local_tls "$NGINX_SITE" "$LOCAL_TLS_PORT"
   patch_hosts_for_domain "$DOMAIN"
+  nginx -s reload
   write_faketls_state
 else
   clear_faketls_state
 fi
 
-backup_file "$MTPROXY_SERVICE_FILE"
-cat > "$MTPROXY_SERVICE_FILE" <<UNIT
+backup_file "$MTG_SERVICE_FILE"
+cat > "$MTG_SERVICE_FILE" <<UNIT
 [Unit]
-Description=MTProxy Telegram Proxy
+Description=MTProxy (mtg)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$MTPROXY_DIR/objs/bin
-ExecStart=$EXEC_START
+ExecStart=${MTG_BINARY} run ${MTG_CONFIG}
 Restart=on-failure
 RestartSec=3
 
@@ -209,36 +222,24 @@ RestartSec=3
 WantedBy=multi-user.target
 UNIT
 
-if [[ -d "$MTPROXY_DIR" ]]; then
-  mv "$MTPROXY_DIR" "$MTPROXY_DIR.prev.$STAMP"
-fi
-mv "$BUILD_DIR" "$MTPROXY_DIR"
-mkdir -p "$BUILD_DIR"
-
 systemctl daemon-reload
-systemctl enable --now mtproxy
+systemctl enable --now mtg
 if command -v ufw >/dev/null 2>&1; then
-  ufw allow "$MTPROXY_PORT"/tcp >/dev/null 2>&1 || true
-fi
-
-if [[ "$MODE" == "standard" ]]; then
-  CLIENT_SECRET="$SECRET"
-else
-  CLIENT_SECRET="ee${SECRET}$(hex_domain "$DOMAIN")"
+  ufw allow "$MTG_PORT"/tcp >/dev/null 2>&1 || true
 fi
 
 echo
 echo "mode: $MODE"
 echo "host_ip: $HOST_IP"
-echo "port: $MTPROXY_PORT"
+echo "port: $MTG_PORT"
 if [[ -n "$DOMAIN" ]]; then
   echo "domain: $DOMAIN"
 fi
 echo "secret_rotated: $ROTATE_SECRET"
 echo
-echo "mtproxy_status:"
-systemctl --no-pager --full status mtproxy | sed -n '1,18p'
+echo "mtg_status:"
+systemctl --no-pager --full status mtg | sed -n '1,10p'
 echo
 echo "telegram_link:"
-echo "tg://proxy?server=$HOST_IP&port=$MTPROXY_PORT&secret=$CLIENT_SECRET"
-echo "https://t.me/proxy?server=$HOST_IP&port=$MTPROXY_PORT&secret=$CLIENT_SECRET"
+echo "tg://proxy?server=$HOST_IP&port=$MTG_PORT&secret=$SECRET"
+echo "https://t.me/proxy?server=$HOST_IP&port=$MTG_PORT&secret=$SECRET"
