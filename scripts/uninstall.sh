@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MTPROXY_DIR="/opt/MTProxy"
-MTPROXY_SECRET_FILE="/etc/mtproxy/secret"
-MTPROXY_SERVICE_FILE="/etc/systemd/system/mtproxy.service"
-MTPROXY_PORT="8443"
-FAKETLS_STATE_FILE="/etc/mtproxy/faketls.env"
+MTG_BINARY="/usr/local/bin/mtg"
+MTG_CONFIG_DIR="/etc/mtg"
+MTG_SERVICE_FILE="/etc/systemd/system/mtg.service"
+MTG_PORT="8443"
+FAKETLS_STATE_FILE="$MTG_CONFIG_DIR/faketls.env"
 
 usage() {
   cat <<USAGE
@@ -42,12 +42,11 @@ filtered = [line for line in lines if line.strip() != f'127.0.0.1 {domain}']
 p.write_text('\n'.join(filtered) + ('\n' if filtered else ''))
 PY
   fi
-  rm -f "$FAKETLS_STATE_FILE"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port) MTPROXY_PORT="$2"; shift 2 ;;
+    --port) MTG_PORT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -59,16 +58,16 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 restore_faketls_side_effects
-systemctl disable --now mtproxy >/dev/null 2>&1 || true
-rm -f "$MTPROXY_SERVICE_FILE"
+systemctl disable --now mtg >/dev/null 2>&1 || true
+rm -f "$MTG_SERVICE_FILE"
 systemctl daemon-reload
 if command -v ufw >/dev/null 2>&1; then
-  ufw delete allow "$MTPROXY_PORT"/tcp >/dev/null 2>&1 || true
+  ufw delete allow "$MTG_PORT"/tcp >/dev/null 2>&1 || true
 fi
-rm -rf "$MTPROXY_DIR"
-rm -f "$MTPROXY_SECRET_FILE"
+rm -f "$MTG_BINARY"
+rm -rf "$MTG_CONFIG_DIR"
 
 echo "removed:"
-echo "  $MTPROXY_SERVICE_FILE"
-echo "  $MTPROXY_SECRET_FILE"
-echo "  $MTPROXY_DIR"
+echo "  $MTG_SERVICE_FILE"
+echo "  $MTG_CONFIG_DIR"
+echo "  $MTG_BINARY"
