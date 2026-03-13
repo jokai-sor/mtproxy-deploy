@@ -2,7 +2,11 @@
 
 Отдельный проект для установки и эксплуатации Telegram MTProxy на Ubuntu.
 
-`mtproxy-deploy` решает одну задачу: чисто собрать, установить, запустить и сопровождать MTProxy на VPS.
+`mtproxy-deploy` решает одну задачу: установить, запустить и сопровождать MTProxy на VPS.
+
+Используется [mtg](https://github.com/9seconds/mtg) — Go-реализация MTProxy, которая проксирует
+настоящий TLS-хендшейк с реальным сертификатом. Это позволяет FakeTLS работать на всех клиентах
+Telegram, включая Android.
 
 ## Что поддерживается
 
@@ -21,13 +25,15 @@
 
 - Ubuntu 24.04 или похожая systemd-система
 - root-доступ
-- `ufw`, если нужно автоматическое открытие порта
+- `curl`, `xxd`, `ufw` (устанавливаются автоматически через `install.sh`)
 - для `faketls`:
   - домен должен смотреть на сервер
   - публичный `443/tcp` должен быть выделен под MTProxy
-  - нужен TLS endpoint для этого домена, который MTProxy сможет локально проверить
+  - нужен TLS endpoint для этого домена, который mtg сможет локально проверить
 
-`nginx` не является зависимостью проекта. Если у вас уже есть локальный HTTPS-сервис и вы хотите переиспользовать его в single-host схеме FakeTLS, `mtproxy-deploy` может опционально пропатчить этот локальный сервис.
+`nginx` не является зависимостью проекта. Если у вас уже есть локальный HTTPS-сервис и вы хотите
+переиспользовать его в single-host схеме FakeTLS, `mtproxy-deploy` может опционально пропатчить
+этот локальный сервис.
 
 ## Быстрый старт
 
@@ -50,7 +56,8 @@ sudo ./scripts/install.sh \
   --domain tg.example.com
 ```
 
-Если вы осознанно строите single-host схему и уже вынесли публичный сайт с `443`, можно включить опциональный helper для локальной TLS-проверки:
+Если вы осознанно строите single-host схему и уже вынесли публичный сайт с `443`, можно включить
+опциональный helper для локальной TLS-проверки:
 
 ```bash
 sudo ./scripts/install.sh \
@@ -71,18 +78,14 @@ sudo ./scripts/install.sh \
 
 ## Что делает install.sh
 
-1. Ставит build-зависимости
-2. Клонирует официальный upstream MTProxy
-3. Применяет 2 совместимых патча, которые понадобились на этом Ubuntu-окружении:
-- `-fcommon` в `Makefile`
-- патч `common/pid.c` из-за предположения upstream о 16-битном PID
-4. Загружает `proxy-secret` и `proxy-multi.conf`
-5. Генерирует MTProxy secret
-6. По умолчанию сохраняет существующий MTProxy secret
-7. Создает `/etc/systemd/system/mtproxy.service`
-8. Заменяет deployment только после успешной сборки
-9. Открывает клиентский TCP-порт в `ufw`, если он есть
-10. Печатает готовые Telegram-ссылки
+1. Ставит зависимости: `curl`, `xxd`, `ufw`
+2. Скачивает последний бинарник `mtg` с GitHub releases (автоматически определяет архитектуру)
+3. Генерирует MTProxy secret через `mtg generate-secret`
+4. По умолчанию сохраняет существующий secret (для ротации используйте `--rotate-secret`)
+5. Записывает `/etc/mtg/config.toml`
+6. Создаёт `/etc/systemd/system/mtg.service`
+7. Открывает клиентский TCP-порт в `ufw`, если он есть
+8. Печатает готовые Telegram-ссылки
 
 ## Структура
 
@@ -92,8 +95,8 @@ scripts/uninstall.sh        Удаление deployment
 README.md                   Английское описание
 README.ru.md                Русское описание
 LICENSE                     MIT
-/docs/OPERATIONS.md         Эксплуатация и откат
-/docs/FAKETLS.md            Особенности FakeTLS
+docs/OPERATIONS.md          Эксплуатация и откат
+docs/FAKETLS.md             Особенности FakeTLS
 ```
 
 ## Формат ссылок
@@ -108,6 +111,17 @@ https://t.me/proxy?server=<IP>&port=<PORT>&secret=<SECRET>
 FakeTLS:
 
 ```text
-tg://proxy?server=<IP>&port=443&secret=ee<SECRET><DOMAIN_HEX>
-https://t.me/proxy?server=<IP>&port=443&secret=ee<SECRET><DOMAIN_HEX>
+tg://proxy?server=<IP>&port=443&secret=<SECRET>
+https://t.me/proxy?server=<IP>&port=443&secret=<SECRET>
 ```
+
+(Secret уже содержит домен — `mtg generate-secret --hex <domain>` генерирует полную строку
+`ee<secret><domain_hex>`, которая вставляется в ссылку напрямую.)
+
+## Примечания
+
+- `mtg` проксирует реальный TLS-сертификат от домена. Именно поэтому FakeTLS работает и на iOS,
+  и на Android.
+- При FakeTLS не стоит пытаться спрятать несколько несвязанных сервисов за одним публичным `443`,
+  если только вы не строите намеренно сложную TCP-маршрутизацию.
+- Держите MTProxy и SOCKS5 в отдельных репозиториях и сервисах.
