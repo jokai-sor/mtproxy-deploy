@@ -4,7 +4,10 @@
 
 Operational deployment project for standalone Telegram MTProxy on Ubuntu.
 
-`mtproxy-deploy` focuses on one job: build, install, run, and operate MTProxy cleanly on a VPS.
+`mtproxy-deploy` focuses on one job: install, run, and operate MTProxy cleanly on a VPS.
+
+It uses [mtg](https://github.com/9seconds/mtg) — a Go-based MTProxy implementation that performs
+a real TLS handshake relay, making fake-TLS work on all Telegram clients including Android.
 
 ## Scope
 
@@ -23,13 +26,14 @@ This project does not manage:
 
 - Ubuntu 24.04 or similar systemd-based distro
 - root access
-- `ufw` installed if you want firewall automation
+- `curl`, `xxd`, `ufw` (installed automatically by `install.sh`)
 - for `faketls` mode:
   - a domain pointed to the server
   - dedicated public `443/tcp` for MTProxy
-  - a TLS-capable endpoint for that domain that MTProxy can probe
+  - a TLS-capable endpoint for that domain that mtg can probe
 
-`nginx` is not a project dependency. If you already have a local HTTPS service and want to reuse it for a single-host FakeTLS setup, `mtproxy-deploy` can optionally patch that local service.
+`nginx` is not a project dependency. If you already have a local HTTPS service and want to reuse it
+for a single-host FakeTLS setup, `mtproxy-deploy` can optionally patch that local service.
 
 ## Quick start
 
@@ -52,7 +56,8 @@ sudo ./scripts/install.sh \
   --domain tg.example.com
 ```
 
-Optional single-host workaround for FakeTLS when you deliberately reuse a local HTTPS service after moving the public website away from `443`:
+Optional single-host workaround for FakeTLS when you deliberately reuse a local HTTPS service
+after moving the public website away from `443`:
 
 ```bash
 sudo ./scripts/install.sh \
@@ -73,18 +78,14 @@ This is an optional compatibility helper, not the primary architecture of the pr
 
 ## What install.sh does
 
-1. Installs build dependencies
-2. Clones official MTProxy upstream
-3. Applies two Ubuntu-compatibility patches observed on this environment:
-- `-fcommon` in `Makefile`
-- PID truncation patch in `common/pid.c`
-4. Downloads `proxy-secret` and `proxy-multi.conf`
-5. Generates MTProxy secret
-6. Preserves the existing MTProxy secret by default
-7. Creates `/etc/systemd/system/mtproxy.service`
-8. Replaces the deployment only after a successful build
-9. Opens the client TCP port in `ufw` if available
-10. Prints ready-to-use Telegram links
+1. Installs dependencies: `curl`, `xxd`, `ufw`
+2. Downloads the latest `mtg` binary from GitHub releases (auto-detects architecture)
+3. Generates an MTProxy secret via `mtg generate-secret`
+4. Preserves the existing secret by default (use `--rotate-secret` to regenerate)
+5. Writes `/etc/mtg/config.toml`
+6. Creates `/etc/systemd/system/mtg.service`
+7. Opens the client TCP port in `ufw` if available
+8. Prints ready-to-use Telegram links
 
 ## Project layout
 
@@ -110,12 +111,17 @@ https://t.me/proxy?server=<IP>&port=<PORT>&secret=<SECRET>
 FakeTLS:
 
 ```text
-tg://proxy?server=<IP>&port=443&secret=ee<SECRET><DOMAIN_HEX>
-https://t.me/proxy?server=<IP>&port=443&secret=ee<SECRET><DOMAIN_HEX>
+tg://proxy?server=<IP>&port=443&secret=<SECRET>
+https://t.me/proxy?server=<IP>&port=443&secret=<SECRET>
 ```
+
+(The FakeTLS secret already encodes the domain — `mtg generate-secret --hex <domain>` produces
+the full `ee<secret><domain_hex>` string that goes directly into the link.)
 
 ## Notes
 
-- Upstream `MTProxy` is specialized software. Keep the deployment simple.
-- For FakeTLS, avoid trying to hide multiple unrelated services behind the same public `443` unless you are deliberately building a more complex TCP-routing design.
+- `mtg` proxies the real TLS certificate from the domain endpoint. This means both iOS and Android
+  Telegram clients work correctly with FakeTLS.
+- For FakeTLS, avoid trying to hide multiple unrelated services behind the same public `443` unless
+  you are deliberately building a more complex TCP-routing design.
 - If you need multi-product operational control, keep MTProxy separate from SOCKS5 tooling.
