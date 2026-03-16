@@ -15,6 +15,7 @@ LOCAL_TLS_PORT=""
 NGINX_SITE="/etc/nginx/sites-enabled/webdock"
 FAKETLS_STATE_FILE="$MTG_CONFIG_DIR/faketls.env"
 ROTATE_SECRET="0"
+MTG_VERSION=""
 
 usage() {
   cat <<USAGE
@@ -31,11 +32,18 @@ Options:
   --local-tls-port PORT
   --nginx-site PATH
   --rotate-secret
+  --mtg-version VERSION     skip GitHub API; install this exact version (e.g. 2.2.0)
 USAGE
 }
 
-hex_domain() {
-  printf '%s' "$1" | xxd -ps -c 256
+validate_ip() {
+  local ip="$1"
+  local re='^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
+  [[ "$ip" =~ $re ]]
+}
+
+validate_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 ))
 }
 
 ensure_config_dir() {
@@ -114,13 +122,15 @@ install_mtg() {
     *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
   esac
 
-  local version
-  version="$(curl -fsSL https://api.github.com/repos/9seconds/mtg/releases/latest \
-    | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')"
-
+  local version="$MTG_VERSION"
   if [[ -z "$version" ]]; then
-    echo "failed to detect latest mtg version" >&2
-    exit 1
+    version="$(curl -fsSL https://api.github.com/repos/9seconds/mtg/releases/latest \
+      | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')"
+    if [[ -z "$version" ]]; then
+      echo "failed to detect latest mtg version (GitHub API may be rate-limited)" >&2
+      echo "retry with: --mtg-version <version>  e.g. --mtg-version 2.2.0" >&2
+      exit 1
+    fi
   fi
 
   echo "installing mtg v${version} (${arch})..."
@@ -129,7 +139,7 @@ install_mtg() {
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   curl -fsSL "$url" | tar xz -C "$tmpdir"
-  install -m 0755 "$tmpdir/mtg" "$MTG_BINARY"
+  install -m 0755 "$tmpdir"/*/mtg "$MTG_BINARY"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -142,6 +152,7 @@ while [[ $# -gt 0 ]]; do
     --local-tls-port) LOCAL_TLS_PORT="$2"; shift 2 ;;
     --nginx-site) NGINX_SITE="$2"; shift 2 ;;
     --rotate-secret) ROTATE_SECRET="1"; shift ;;
+    --mtg-version) MTG_VERSION="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 1 ;;
   esac
@@ -155,6 +166,9 @@ fi
 if [[ -z "$HOST_IP" ]]; then
   HOST_IP="$(hostname -I | awk '{print $1}')"
 fi
+
+validate_ip "$HOST_IP" || { echo "invalid host IP: $HOST_IP" >&2; exit 1; }
+validate_port "$MTG_PORT" || { echo "invalid port: $MTG_PORT (must be 1-65535)" >&2; exit 1; }
 
 if [[ "$MODE" != "standard" && "$MODE" != "faketls" ]]; then
   echo "invalid mode: $MODE" >&2
@@ -223,7 +237,8 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now mtg
+systemctl enable mtg
+systemctl start mtg || true
 if command -v ufw >/dev/null 2>&1; then
   ufw allow "$MTG_PORT"/tcp >/dev/null 2>&1 || true
 fi
