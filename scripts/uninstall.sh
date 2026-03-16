@@ -4,13 +4,15 @@ set -euo pipefail
 MTG_BINARY="/usr/local/bin/mtg"
 MTG_CONFIG_DIR="/etc/mtg"
 MTG_SERVICE_FILE="/etc/systemd/system/mtg.service"
-MTG_PORT="8443"
+MTG_PORT=""
 FAKETLS_STATE_FILE="$MTG_CONFIG_DIR/faketls.env"
 
 usage() {
   cat <<USAGE
 Usage:
   sudo ./scripts/uninstall.sh [--port PORT]
+
+If --port is not given, the port is read from /etc/mtg/config.toml automatically.
 USAGE
 }
 
@@ -55,6 +57,18 @@ done
 if [[ "${EUID}" -ne 0 ]]; then
   echo "run as root: sudo ./scripts/uninstall.sh" >&2
   exit 1
+fi
+
+if [[ -z "$MTG_PORT" ]]; then
+  cfg_port="$(sed -n 's/^bind-to *= *"[^:]*:\([0-9]*\)".*/\1/p' \
+    "$MTG_CONFIG_DIR/config.toml" 2>/dev/null | head -1 || true)"
+  if [[ -n "$cfg_port" ]]; then
+    MTG_PORT="$cfg_port"
+    echo "port: read from config ($MTG_PORT)"
+  else
+    MTG_PORT="8443"
+    echo "port: config not found, using default ($MTG_PORT)"
+  fi
 fi
 
 restore_faketls_side_effects
