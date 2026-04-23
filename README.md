@@ -97,7 +97,9 @@ README.md                   English overview
 README.ru.md                Russian overview
 LICENSE                     MIT license
 docs/OPERATIONS.md          Runtime operations and rollback
+docs/OPERATIONS.ru.md       Runtime operations and rollback in Russian
 docs/FAKETLS.md             FakeTLS notes and caveats
+docs/FAKETLS.ru.md          FakeTLS notes and caveats in Russian
 tests/*.sh                  Shell regression tests for install/uninstall logic
 ```
 

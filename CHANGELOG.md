@@ -7,6 +7,7 @@
 - Shell regression tests for install and uninstall helper logic
 - Release-check commands in operations documentation
 - Notes for single-host FakeTLS DNS behavior, including IPv6/AAAA caveats
+- Russian operations and FakeTLS documentation
 
 ### Changed
 
