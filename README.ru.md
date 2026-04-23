@@ -79,13 +79,14 @@ sudo ./scripts/install.sh \
 ## Что делает install.sh
 
 1. Ставит зависимости: `curl`, `xxd`, `ufw`
-2. Скачивает последний бинарник `mtg` с GitHub releases (автоматически определяет архитектуру)
+2. Скачивает `mtg` `2.2.8` по умолчанию (автоматически определяет архитектуру; можно переопределить через `--mtg-version`)
 3. Генерирует MTProxy secret через `mtg generate-secret`
 4. По умолчанию сохраняет существующий secret (для ротации используйте `--rotate-secret`)
 5. Записывает `/etc/mtg/config.toml`
 6. Создаёт `/etc/systemd/system/mtg.service`
-7. Открывает клиентский TCP-порт в `ufw`, если он есть
-8. Печатает готовые Telegram-ссылки
+7. Перезапускает `mtg`, чтобы изменения бинарника, secret и config сразу применились
+8. Открывает клиентский TCP-порт в `ufw`, если он есть
+9. Печатает готовые Telegram-ссылки
 
 ## Структура
 
@@ -97,6 +98,7 @@ README.ru.md                Русское описание
 LICENSE                     MIT
 docs/OPERATIONS.md          Эксплуатация и откат
 docs/FAKETLS.md             Особенности FakeTLS
+tests/*.sh                  Shell regression tests для логики install/uninstall
 ```
 
 ## Формат ссылок
@@ -111,8 +113,8 @@ https://t.me/proxy?server=<IP>&port=<PORT>&secret=<SECRET>
 FakeTLS:
 
 ```text
-tg://proxy?server=<IP>&port=443&secret=<SECRET>
-https://t.me/proxy?server=<IP>&port=443&secret=<SECRET>
+tg://proxy?server=<DOMAIN>&port=443&secret=<SECRET>
+https://t.me/proxy?server=<DOMAIN>&port=443&secret=<SECRET>
 ```
 
 (Secret уже содержит домен — `mtg generate-secret --hex <domain>` генерирует полную строку
@@ -124,4 +126,7 @@ https://t.me/proxy?server=<IP>&port=443&secret=<SECRET>
   и на Android.
 - При FakeTLS не стоит пытаться спрятать несколько несвязанных сервисов за одним публичным `443`,
   если только вы не строите намеренно сложную TCP-маршрутизацию.
+- Для single-host FakeTLS публикуйте только `A`-запись для proxy hostname, если `mtg` не слушает
+  IPv6. Публичная `AAAA`-запись на неиспользуемый IPv6 `443` может давать состояние "connected",
+  но ломать реальный трафик.
 - Держите MTProxy и SOCKS5 в отдельных репозиториях и сервисах.

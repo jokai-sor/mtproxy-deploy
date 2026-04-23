@@ -40,9 +40,16 @@ works fine.
 
 This is supported by `install.sh --local-tls-proxy nginx --local-tls-port 4443`.
 
+If the proxy hostname has a public `AAAA` record, `mtg` must listen on IPv6 as well. Otherwise,
+remove the `AAAA` record and keep only the `A` record that points to the public IPv4 address where
+`mtg` listens.
+
 ## Caveats
 
 - If the domain certificate renews (e.g., Let's Encrypt), restart mtg so it picks up
   the new certificate on the next connection probe.
 - The domain in the secret must match the domain actually served at the TLS endpoint.
   A mismatch will cause connection failures on clients that validate certificates.
+- `mtg doctor` expects the FakeTLS hostname to resolve to the public proxy address. In the
+  single-host workaround, the local `/etc/hosts` override intentionally resolves it to `127.0.0.1`,
+  so that specific check can fail even when the workaround is functioning.

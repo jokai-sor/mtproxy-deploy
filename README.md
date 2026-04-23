@@ -79,13 +79,14 @@ This is an optional compatibility helper, not the primary architecture of the pr
 ## What install.sh does
 
 1. Installs dependencies: `curl`, `xxd`, `ufw`
-2. Downloads the latest `mtg` binary from GitHub releases (auto-detects architecture)
+2. Downloads `mtg` `2.2.8` by default (auto-detects architecture; override with `--mtg-version`)
 3. Generates an MTProxy secret via `mtg generate-secret`
 4. Preserves the existing secret by default (use `--rotate-secret` to regenerate)
 5. Writes `/etc/mtg/config.toml`
 6. Creates `/etc/systemd/system/mtg.service`
-7. Opens the client TCP port in `ufw` if available
-8. Prints ready-to-use Telegram links
+7. Restarts `mtg` so binary, secret, and config changes are applied immediately
+8. Opens the client TCP port in `ufw` if available
+9. Prints ready-to-use Telegram links
 
 ## Project layout
 
@@ -97,6 +98,7 @@ README.ru.md                Russian overview
 LICENSE                     MIT license
 docs/OPERATIONS.md          Runtime operations and rollback
 docs/FAKETLS.md             FakeTLS notes and caveats
+tests/*.sh                  Shell regression tests for install/uninstall logic
 ```
 
 ## Telegram links
@@ -111,8 +113,8 @@ https://t.me/proxy?server=<IP>&port=<PORT>&secret=<SECRET>
 FakeTLS:
 
 ```text
-tg://proxy?server=<IP>&port=443&secret=<SECRET>
-https://t.me/proxy?server=<IP>&port=443&secret=<SECRET>
+tg://proxy?server=<DOMAIN>&port=443&secret=<SECRET>
+https://t.me/proxy?server=<DOMAIN>&port=443&secret=<SECRET>
 ```
 
 (The FakeTLS secret already encodes the domain — `mtg generate-secret --hex <domain>` produces
@@ -124,4 +126,7 @@ the full `ee<secret><domain_hex>` string that goes directly into the link.)
   Telegram clients work correctly with FakeTLS.
 - For FakeTLS, avoid trying to hide multiple unrelated services behind the same public `443` unless
   you are deliberately building a more complex TCP-routing design.
+- For a single-host FakeTLS setup, publish only an `A` record for the proxy hostname unless `mtg`
+  also listens on IPv6. A public `AAAA` record that points to an unused IPv6 `443` can make clients
+  appear connected while traffic does not flow correctly.
 - If you need multi-product operational control, keep MTProxy separate from SOCKS5 tooling.
